@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>German WAV Transcriber</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+            line-height: 1.6;
+            background-color: #f4f4f4;
+        }
+        .container {
+            background-color: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            max-width: 600px;
+            margin: 40px auto;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        form {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        input[type="file"] {
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        button {
+            padding: 12px 20px;
+            background-color: #5cb85c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.2s ease;
+        }
+        button:hover {
+            background-color: #4cae4c;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 4px;
+        }
+        .success {
+            background-color: #dff0d8;
+            border: 1px solid #d6e9c6;
+            color: #3c763d;
+        }
+        .error {
+            background-color: #f2dede;
+            border: 1px solid #ebccd1;
+            color: #a94442;
+        }
+        #loading {
+            text-align: center;
+            margin-top: 15px;
+            font-style: italic;
+            color: #666;
+            display: none; /* Hidden by default */
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>German WAV Transcriber 🇩🇪🎙️</h1>
+        <p>Upload your German <code>.wav</code> audio file to transcribe it.</p>
+
+        <form id="upload-form">
+            <label for="wav_file">Select WAV file:</label>
+            <input type="file" id="wav_file" name="wav_file" accept=".wav,audio/wav,audio/x-wav" required>
+            <button type="submit" id="submit-button">Transcribe</button>
+        </form>
+
+        <div id="loading">Processing your file... Please wait. Transcription can take some time.</div>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        const form = document.getElementById('upload-form');
+        const resultDiv = document.getElementById('result');
+        const loadingDiv = document.getElementById('loading');
+        const submitButton = document.getElementById('submit-button');
+        const fileInput = document.getElementById('wav_file');
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault(); // Prevent default form submission
+
+            const formData = new FormData();
+            formData.append('wav_file', fileInput.files[0]);
+
+            // Clear previous results and show loading indicator
+            resultDiv.innerHTML = '';
+            resultDiv.className = ''; // Reset result classes
+            loadingDiv.style.display = 'block';
+            submitButton.disabled = true;
+            submitButton.textContent = 'Processing...';
+
+            try {
+                const response = await fetch('/transcribe/', {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                const data = await response.json(); // Always try to parse JSON
+
+                if (response.ok) {
+                    resultDiv.className = 'success';
+                    resultDiv.innerHTML = `<strong>Success!</strong> ${data.message}<br>Transcript saved as: <code>${data.transcript_filename}</code>`;
+                    console.log('Transcription successful:', data);
+                } else {
+                    // Use detail from JSON error response if available, otherwise use status text
+                    const errorMessage = data.detail || `Server error: ${response.status} ${response.statusText}`;
+                    resultDiv.className = 'error';
+                    resultDiv.innerHTML = `<strong>Error:</strong> ${errorMessage}`;
+                    console.error('Transcription failed:', data);
+                }
+            } catch (error) {
+                resultDiv.className = 'error';
+                resultDiv.innerHTML = `<strong>Error:</strong> Could not connect to the server or unexpected error occurred. Check console for details.`;
+                console.error('Network or unexpected error:', error);
+            } finally {
+                // Hide loading indicator and re-enable button
+                loadingDiv.style.display = 'none';
+                submitButton.disabled = false;
+                submitButton.textContent = 'Transcribe';
+            }
+        });
+    </script>
+</body>
+</html> 

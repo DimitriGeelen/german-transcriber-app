@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+openai-whisper
+python-dotenv # For loading .env files
+python-multipart # For FastAPI file uploads
+
+# Testing
+pytest
+pytest-asyncio # To run async tests
+httpx # For async testing FastAPI endpoints 
