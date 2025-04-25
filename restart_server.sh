@@ -57,8 +57,8 @@ echo "Caches and directories cleared."
 echo "---> Restarting Uvicorn server in the background..."
 
 # Make sure ffmpeg is checked (using the check within main.py implicitly)
-# Start the server in the background
-"$VENV_UVICORN" main:app --host "$HOST" --port "$PORT" & 
+# Start the server in the background, redirecting output to a log file
+"$VENV_UVICORN" main:app --host "$HOST" --port "$PORT" > uvicorn_startup.log 2>&1 &
 UVICORN_PID=$! # Get the PID of the background process
 
 echo "Server started with PID $UVICORN_PID. Waiting a few seconds for startup..."

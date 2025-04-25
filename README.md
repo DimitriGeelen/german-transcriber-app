@@ -1,15 +1,128 @@
 # German WAV Transcriber Web App 🇩🇪🎙️➡️📝
 
-A simple web application built with FastAPI and OpenAI's Whisper to transcribe German `.wav` audio files locally.
+A simple web application built with FastAPI and OpenAI's Whisper to transcribe German `.wav` audio files locally, with optional speaker diarization.
 
 ## Features
 
 *   Upload `.wav` files via a simple web interface.
+*   **Asynchronous Transcription:** Processes audio in the background, allowing the server to handle other requests.
 *   Transcribes audio using a locally run Whisper model (configurable size).
+*   **[NEW]** Optionally performs speaker diarization using SpeechBrain to label different speakers.
 *   Specifically configured for German language transcription (configurable).
-*   Saves transcriptions to text files on the server.
+*   **Status Endpoint:** Provides a `/status/{task_id}` endpoint to check the progress and retrieve results.
+*   Returns detailed results upon completion, including word-level timestamps, speaker labels (if diarization is successful), and a formatted conversation text.
 *   Application behavior is configurable via environment variables (`.env` file).
-*   Includes basic automated tests (using `pytest`).
+*   Includes automated tests (using `pytest`) covering the asynchronous API workflow.
+
+## Architecture Overview
+
+The application uses FastAPI for the web framework and follows an asynchronous request-response pattern for transcription tasks.
+
+1.  **Client Interaction:** The user uploads a WAV file via the web interface (served by the root `/` endpoint).
+2.  **Transcribe Request:** The browser POSTs the file to the `/transcribe/` endpoint.
+3.  **Initial Handling:** FastAPI receives the request.
+    *   Validates the file type and checks for necessary dependencies (like `ffmpeg`).
+    *   Saves the uploaded file to a temporary location in the configured `UPLOAD_DIR`.
+    *   Creates a unique `task_id`.
+    *   Stores an initial `PENDING` status for the task in an in-memory dictionary (`tasks`).
+    *   Schedules the `process_transcription_task` function to run in the background using `BackgroundTasks`.
+    *   Immediately returns a `202 Accepted` response to the client, including the `task_id`.
+4.  **Background Processing (`process_transcription_task`):**
+    *   Updates the task status to `PROCESSING`.
+    *   Loads the temporary audio file.
+    *   Performs transcription using the configured Whisper model.
+    *   (Optional) Performs speaker diarization using the SpeechBrain embedding model and clustering.
+    *   Formats the results (word segments with timestamps, speakers, confidence).
+    *   Saves the detailed JSON result to a file in `TRANSCRIPT_DIR`.
+    *   Generates and saves a formatted conversation text file to `TRANSCRIPT_DIR`.
+    *   Updates the task status to `COMPLETED` (or `FAILED` if an error occurred) and stores the *paths* to the result files in the `tasks` dictionary.
+    *   Deletes the temporary uploaded audio file.
+5.  **Status Polling:** The client uses the received `task_id` to poll the `/status/{task_id}` GET endpoint.
+6.  **Status Response:**
+    *   The endpoint checks the in-memory `tasks` dictionary for the given `task_id`.
+    *   If the task is `PENDING` or `PROCESSING`, it returns the status and a placeholder message.
+    *   If the task is `FAILED`, it returns the status and the stored error message.
+    *   If the task is `COMPLETED`, it reads the result JSON file and the conversation text file (using the paths stored in the `tasks` dictionary) and returns the status along with the file contents.
+
+**Diagram:**
+
+```mermaid
+graph TD
+    subgraph "User Interaction"
+        U[User] --> B(Browser/Client)
+    end
+
+    subgraph "FastAPI Application (main.py)"
+        B -- POST /transcribe/ (WAV) --> T(Transcribe Endpoint)
+        T -- File Save --> FS(File System: ./uploads)
+        T -- Add Task --> BT(BackgroundTasks)
+        T -- Update Status: PENDING --> TM(Task Manager: In-memory Dict)
+        T -- 202 Accepted (Task ID) --> B
+
+        B -- GET /status/{task_id} --> S(Status Endpoint)
+        S -- Read Status --> TM
+        S -- Read Results (on COMPLETE) --> FS2(File System: ./transcripts)
+        S -- 200 OK (Status/Results) --> B
+        
+        LS([Lifespan Manager]) -- Loads --> W
+        LS -- Loads --> SB
+    end
+
+    subgraph "Background Processing (process_transcription_task)"
+        BT -- Run Task --> PTT[process_transcription_task]
+        PTT -- Update Status: PROCESSING --> TM
+        PTT -- Load Audio --> FS
+        PTT -- Transcribe --> W(Whisper Model)
+        PTT -- Embed/Cluster --> SB(SpeechBrain Embedding Model)
+        PTT -- Format Results --> FR(Format Results Logic)
+        PTT -- Save JSON/Text --> FS2
+        PTT -- Update Status: COMPLETED/FAILED, Paths --> TM
+        PTT -- Cleanup Temp File --> FS
+    end
+
+    subgraph "Models (Loaded via Lifespan)"
+         W
+         SB
+    end
+    
+    style U fill:#f9f,stroke:#333,stroke-width:2px
+    style B fill:#ccf,stroke:#333,stroke-width:2px
+```
+
+**Key Components:**
+
+*   **FastAPI:** Web framework handling requests, responses, and background tasks.
+*   **Uvicorn:** ASGI server running the FastAPI application.
+*   **Whisper (whisper_timestamped):** Model for audio transcription with word-level timestamps.
+*   **SpeechBrain:** Used for speaker embedding extraction required for diarization.
+*   **Scikit-learn:** Used for clustering speaker embeddings.
+*   **In-Memory Task Dictionary:** Simple state management for background tasks (not persistent).
+*   **BackgroundTasks:** FastAPI utility for running tasks after returning a response.
+*   **Lifespan Manager:** FastAPI context manager to load ML models on startup and release them on shutdown.
+
+## Testing
+
+The project includes automated tests using `pytest` located in the `tests/` directory. These tests utilize `httpx` for asynchronous API calls and `unittest.mock` for extensive mocking.
+
+**Test Suite (`tests/test_main.py`):**
+
+*   `test_root_endpoint`: Checks if the root `/` endpoint successfully serves the HTML interface (status code 200, correct content type).
+*   `test_transcribe_endpoint_success_with_diarization` (**Skipped**): Original synchronous success test, now superseded by the async workflow tests.
+*   `test_transcribe_endpoint_save_failure`: Verifies that if saving the initial uploaded WAV file fails (simulated `OSError`), the `/transcribe/` endpoint immediately returns a 500 error *before* starting any background task.
+*   `test_transcribe_endpoint_transcript_save_failure` (**Skipped**): Original synchronous test for errors during transcript file saving.
+*   `test_transcribe_endpoint_transcription_failure` (**Skipped**): Original synchronous test for errors during the transcription process itself.
+*   `test_transcribe_endpoint_diarization_failure` (**Skipped**): Original synchronous test for errors during the diarization process.
+*   `test_transcribe_endpoint_ffmpeg_missing`: Ensures that if `ffmpeg` is detected as unavailable (simulated via `app.state`), the `/transcribe/` endpoint immediately returns a 503 error.
+*   `test_speechbrain_import_fails`: Attempts to verify graceful handling if `speechbrain` import fails (currently raises `ImportError` as expected, but marked as needing review for the async context).
+*   `test_transcribe_async_starts_job`: Checks that POSTing to `/transcribe/` successfully returns a 202 status, the correct response structure (`task_id`, `message`), and that the mocked background task (`mock_process_transcription_task`) is correctly initiated and updates the task status.
+*   `test_status_endpoint_workflow`: Tests the complete asynchronous flow by POSTing to `/transcribe/`, then polling the `/status/{task_id}` endpoint until the mocked task reports completion, and finally verifying the structure and content of the successful result returned by the status endpoint.
+*   `test_status_endpoint_not_found`: Verifies that requesting status for an unknown `task_id` via `/status/{task_id}` correctly returns a 404 error.
+
+**Mocking Strategy:**
+
+*   The `client` fixture mocks the ML models (`Whisper`, `SpeechBrain`) and other state (`ffmpeg_available`, `device`, paths) within `app.state` to provide a controlled environment for endpoint tests.
+*   The `process_transcription_task` function is patched in relevant tests using a mock version (`mock_process_transcription_task`) that simulates different outcomes (processing, success with dummy file creation, failure) and updates the shared `tasks` dictionary.
+*   Filesystem operations (`shutil.copyfileobj`, `os.remove`, `os.path.exists`, `builtins.open`, `json.dump`) are patched where necessary to isolate tests from the actual filesystem and simulate I/O errors.
 
 ## Prerequisites
 
@@ -25,6 +138,8 @@ Before setting up the Python environment, ensure you have the following installe
     *   **Windows:** Download from the official ffmpeg website or use a package manager like Chocolatey (`choco install ffmpeg`).
     *   Verify installation with `ffmpeg -version`.
 5.  **`rustc` (Rust compiler):** May be required during the installation of the `tokenizers` dependency (part of `openai-whisper`). If `pip install` fails related to `tokenizers`, install Rust from <https://rustup.rs/>.
+6.  **[NEW] PyTorch:** Required by both Whisper and SpeechBrain. `pip install -r requirements.txt` should handle this. Ensure you have a compatible version, especially if using a GPU (install the CUDA version if applicable). See <https://pytorch.org/>.
+7.  **[NEW] (Optional but Recommended for Diarization) Git LFS:** SpeechBrain might use Git LFS to download model files. Install it if you encounter download issues related to LFS during the first run: <https://git-lfs.com/>.
 
 ## Setup & Installation
 
@@ -47,7 +162,7 @@ Before setting up the Python environment, ensure you have the following installe
     ```bash
     pip install -r requirements.txt
     ```
-    *(This step downloads FastAPI, Uvicorn, Whisper, Pytest, etc. It may take some time, especially for Whisper and its dependencies like PyTorch).* 
+    *(This step downloads FastAPI, Uvicorn, Whisper, SpeechBrain, PyTorch, etc. It may take some time, especially for the large ML libraries and their dependencies).* 
 
 4.  **Configure Environment Variables:**
     *   Copy the example environment file:
@@ -68,31 +183,63 @@ Modify the `.env` file to control the application's behavior:
 *   `PORT`: The port the development server listens on. Defaults to `8000`.
 
 *Security Note:* Ensure `UPLOAD_DIR` and `TRANSCRIPT_DIR` are secure locations and the application is not exposed to untrusted networks if using `HOST=0.0.0.0`.
+*Model Caching:* Both Whisper and SpeechBrain models will be downloaded and cached locally (typically in `~/.cache/torch/` or within the project under `pretrained_models/`) on their first use.
 
 ## Running the Application
 
 1.  **Ensure your virtual environment is activated.** (`source venv/bin/activate`)
 2.  **Start the FastAPI development server:**
     ```bash
-    uvicorn main:app --reload --host $(grep -E '^HOST=' .env | cut -d '=' -f2 || echo '127.0.0.1') --port $(grep -E '^PORT=' .env | cut -d '=' -f2 || echo '8000')
-    # Or simply use the defaults if HOST/PORT not set in .env:
-    # uvicorn main:app --reload
+    # Recommended: Use the restart script for clean state
+    ./restart_server.sh 
+    # Or manually:
+    # uvicorn main:app --reload --host $(grep -E \'^HOST=\' .env | cut -d \'=\' -f2 || echo \'127.0.0.1\') --port $(grep -E \'^PORT=\' .env | cut -d \'=\' -f2 || echo \'8000\')
     ```
-    *   The `--reload` flag automatically restarts the server on code changes.
+    *   The `restart_server.sh` script helps kill old processes and clear temporary files.
     *   The server address (e.g., `http://127.0.0.1:8000`) will be shown in the terminal.
-    *   **First Run:** The first time you run the app (or transcribe), Whisper will download the specified model (`WHISPER_MODEL_SIZE`). This download can take time depending on the model size and your internet connection.
+    *   **First Run:** The first time you run the app, Whisper and SpeechBrain will download their specified models. This download can take time.
 
 3.  **Access the Web Interface:**
     *   Open your web browser and navigate to the address shown by Uvicorn (e.g., `http://127.0.0.1:8000`).
 
-4.  **Upload and Transcribe:**
+4.  **Upload and Check Status (New Workflow):**
     *   Use the form to select a German `.wav` file.
     *   Click "Transcribe".
-    *   Wait for processing. A loading message will appear. **Transcription can take significant time**, especially for large files or models on less powerful hardware.
-    *   A success message will appear with the filename of the saved transcript.
+    *   The server will immediately respond with `202 Accepted` and a JSON message containing a `task_id` (e.g., `{"task_id":"some-uuid-string", "message":"File upload accepted, processing started."}`).
+    *   **Polling:** You need to periodically check the `/status/{task_id}` endpoint (replace `{task_id}` with the actual ID received) to monitor progress.
+        *   Example (using `curl`):
+          ```bash
+          # Initial check (might show PENDING or PROCESSING)
+          curl http://127.0.0.1:8000/status/some-uuid-string
+          
+          # Keep polling until status is COMPLETED or FAILED
+          ```
+    *   **Transcription and diarization still occur in the background and can take significant time.**
 
-5.  **Find Transcripts:**
-    *   Transcripts are saved as `.txt` files in the `TRANSCRIPT_DIR` (default: `./transcripts`).
+5.  **Retrieve Results:**
+    *   When polling `/status/{task_id}` shows `"status": "COMPLETED"`, the response will contain the transcription results.
+    *   **Successful Response Structure:**
+        ```json
+        {
+          "task_id": "some-uuid-string",
+          "status": "COMPLETED",
+          "result": [
+            {
+              "start": 0.5,
+              "end": 1.2,
+              "text": "Hallo",
+              "speaker": "SPEAKER_00",
+              "confidence": 0.95
+            },
+            // ... more word segments
+          ],
+          "conversation_text": "[00:00] SPEAKER_00: Hallo Welt.\n[00:03] SPEAKER_01: Dies ist ein Test."
+        }
+        ```
+        *   `result`: A list of dictionaries, each representing a transcribed word with timestamps, text, assigned speaker label, and confidence score.
+        *   `conversation_text`: A formatted string presenting the conversation with timestamps and speakers, suitable for direct display.
+    *   If the status is `"FAILED"`, the `result` field will contain an error message.
+    *   While processing, the `result` field will typically contain the string `"Processing is ongoing."`. 
 
 ## Running with Docker (Alternative)
 
@@ -163,15 +310,22 @@ This project includes automated tests using `pytest`.
 1.  **Ensure the virtual environment is activated and dev dependencies are installed.** (`pip install -r requirements.txt`)
 2.  **Run tests:**
     ```bash
-    PYTHONPATH=. pytest
+    python -m pytest -v tests/test_main.py
     ```
-    *   `PYTHONPATH=.` is needed so pytest can find the `main.py` module.
-    *   Tests currently *mock* the Whisper transcription process to focus on API behavior (file handling, responses, cleanup).
+    *   The tests cover the `/` (root), `/transcribe/`, and `/status/{task_id}` API endpoints.
+    *   **Mocking:** Tests use `unittest.mock` extensively to:
+        *   Prevent actual model loading.
+        *   Prevent actual file I/O.
+        *   **Simulate the asynchronous workflow:** Mock the background task function (`process_transcription_task`) to control its outcome (success/failure) and use `asyncio.sleep` to test the polling of the `/status/{task_id}` endpoint.
+        *   Test various scenarios like successful transcription, dependency checks (ffmpeg), file saving errors, and task status reporting.
+        *   The `client` fixture manually sets the application state (`app.state`) for endpoint tests.
 
 ## Notes & Potential Improvements
 
-*   **Performance:** Transcription is CPU/GPU intensive. Consider using smaller models (`tiny`, `base`) for faster results on less powerful machines. GPU acceleration significantly speeds up Whisper if available and PyTorch is installed with CUDA support.
+*   **Performance:** Transcription and diarization are CPU/GPU intensive. Consider using smaller models (`tiny`, `base`) for faster results on less powerful machines. GPU acceleration significantly speeds up Whisper and potentially SpeechBrain if available and PyTorch is installed with CUDA support.
+*   **[NEW] Diarization Accuracy:** Speaker diarization quality depends heavily on the audio characteristics (clarity, speaker overlap, noise) and the chosen model. The current setup uses a standard VoxCeleb-trained model; results may vary. Tuning diarization hyperparameters (if exposed) or using different models might be necessary for specific use cases.
 *   **Error Handling:** Basic error handling is in place. Check the terminal where `uvicorn` is running for detailed logs and error messages.
-*   **File Type Validation:** The application currently only logs a warning for non-`.wav` files. Stricter validation could be added in `main.py`.
-*   **Asynchronous Transcription:** For production use or handling many requests, the `model.transcribe` call (which is blocking) should ideally be run in a separate thread or process using tools like `FastAPI Background Tasks` or a dedicated task queue (e.g., Celery) to avoid blocking the server.
-*   **Scalability:** This setup is intended for local/single-user operation. Scaling would require architectural changes. 
+*   **File Type Validation:** The application currently only logs a warning for some non-`.wav` content types. Stricter validation could be added in `main.py`.
+*   **Asynchronous Processing:** The application now uses `FastAPI Background Tasks` to perform the heavy transcription/diarization work off the main request thread, improving responsiveness.
+*   **Scalability:** This setup is intended for local/single-user operation. For higher concurrency, consider a more robust task queue system (e.g., Celery with Redis/RabbitMQ) instead of the in-memory `tasks` dictionary and `BackgroundTasks`.
+*   **Result Storage:** Currently, results are linked via an in-memory dictionary. For persistence across server restarts, results (or at least the file paths) would need to be stored in a database or more permanent storage. 

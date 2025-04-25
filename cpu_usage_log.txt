@@ -1,0 +1,4 @@
+--- Monitor Start ---
+Command 'mpstat' not found, but can be installed with:
+sudo apt install sysstat
+mpstat not found, skipping CPU details
