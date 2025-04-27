@@ -1,0 +1,6 @@
+repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0 # Use a specific tag or commit hash
+    hooks:
+    -   id: check-added-large-files
+        args: ['--maxkb=100000'] # 100 MB limit (100 * 1000 kB) 
