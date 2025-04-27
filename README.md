@@ -13,6 +13,8 @@ A simple web application built with FastAPI and OpenAI's Whisper to transcribe G
 *   Returns detailed results upon completion, including word-level timestamps, speaker labels (if diarization is successful), and a formatted conversation text.
 *   Application behavior is configurable via environment variables (`.env` file).
 *   Includes automated tests (using `pytest`) covering the asynchronous API workflow.
+*   **Helper Scripts:** Includes `install.sh` for setup and `restart_server.sh` for running.
+*   **Pre-commit Hook:** Includes a pre-commit hook to prevent accidentally committing large files (>100MB).
 
 ## Architecture Overview
 
@@ -140,6 +142,7 @@ Before setting up the Python environment, ensure you have the following installe
 5.  **`rustc` (Rust compiler):** May be required during the installation of the `tokenizers` dependency (part of `openai-whisper`). If `pip install` fails related to `tokenizers`, install Rust from <https://rustup.rs/>.
 6.  **[NEW] PyTorch:** Required by both Whisper and SpeechBrain. `pip install -r requirements.txt` should handle this. Ensure you have a compatible version, especially if using a GPU (install the CUDA version if applicable). See <https://pytorch.org/>.
 7.  **[NEW] (Optional but Recommended for Diarization) Git LFS:** SpeechBrain might use Git LFS to download model files. Install it if you encounter download issues related to LFS during the first run: <https://git-lfs.com/>.
+8.  **(Development)** `pre-commit` (if you plan to contribute or commit changes): Recommended for running code quality checks before commits. The `install.sh` script can optionally install this.
 
 ## Setup & Installation
 
@@ -149,7 +152,22 @@ Before setting up the Python environment, ensure you have the following installe
     cd <your_project_directory>
     ```
 
-2.  **Create and activate a Python virtual environment:**
+2.  **Run the installation script (Recommended):**
+    The `install.sh` script automates the setup process.
+    ```bash
+    chmod +x install.sh
+    ./install.sh
+    ```
+    This script will:
+    *   Check for `python3` and `ffmpeg`.
+    *   Create a Python virtual environment (`venv`) if it doesn't exist.
+    *   Install Python dependencies from `requirements.txt` into the virtual environment.
+    *   Optionally install `pre-commit` for development.
+    *   Copy `.env_example` to `.env` if `.env` doesn't exist.
+    *   Guide you on activating the environment and configuring `.env`.
+
+3.  **(Manual Alternative) Create and activate a Python virtual environment:**
+    (Skip if you used `install.sh`)
     ```bash
     # Use python3 if python is not linked
     python3 -m venv venv
@@ -158,18 +176,27 @@ Before setting up the Python environment, ensure you have the following installe
     # .\venv\Scripts\Activate.ps1 # Windows PowerShell
     ```
 
-3.  **Install Python dependencies:**
+4.  **(Manual Alternative) Install Python dependencies:**
+    (Skip if you used `install.sh`)
     ```bash
     pip install -r requirements.txt
     ```
-    *(This step downloads FastAPI, Uvicorn, Whisper, SpeechBrain, PyTorch, etc. It may take some time, especially for the large ML libraries and their dependencies).* 
+    *(This step downloads FastAPI, Uvicorn, Whisper, SpeechBrain, PyTorch, etc. It may take some time, especially for the large ML libraries and their dependencies).*
 
-4.  **Configure Environment Variables:**
+5.  **(Manual Alternative) Configure Environment Variables:**
+    (Skip if `install.sh` created `.env` for you)
     *   Copy the example environment file:
         ```bash
         cp .env_example .env
         ```
     *   Edit the `.env` file. See the Configuration section below for details.
+
+6.  **(Development) Install Pre-commit Hooks:**
+    (Skip if you used `install.sh` and opted in, or if you don't plan to commit changes)
+    ```bash
+    pip install pre-commit # If not already installed
+    pre-commit install
+    ```
 
 ## Configuration (`.env` file)
 
@@ -188,21 +215,22 @@ Modify the `.env` file to control the application's behavior:
 ## Running the Application
 
 1.  **Ensure your virtual environment is activated.** (`source venv/bin/activate`)
-2.  **Start the FastAPI development server:**
+2.  **Review/Edit `.env`:** Make sure the configuration in `.env` (model size, directories, etc.) is correct for your setup.
+3.  **Start the FastAPI development server:**
     ```bash
-    # Recommended: Use the restart script for clean state
-    ./restart_server.sh 
+    # Recommended: Use the restart script for clean state & logging
+    ./restart_server.sh
     # Or manually:
-    # uvicorn main:app --reload --host $(grep -E \'^HOST=\' .env | cut -d \'=\' -f2 || echo \'127.0.0.1\') --port $(grep -E \'^PORT=\' .env | cut -d \'=\' -f2 || echo \'8000\')
+    # uvicorn main:app --reload --host $(grep -E '^HOST=' .env | cut -d '=' -f2 || echo '127.0.0.1') --port $(grep -E '^PORT=' .env | cut -d '=' -f2 || echo '8000')
     ```
-    *   The `restart_server.sh` script helps kill old processes and clear temporary files.
+    *   The `restart_server.sh` script helps kill old processes and clear temporary files before starting the server with logging enabled.
     *   The server address (e.g., `http://127.0.0.1:8000`) will be shown in the terminal.
     *   **First Run:** The first time you run the app, Whisper and SpeechBrain will download their specified models. This download can take time.
 
-3.  **Access the Web Interface:**
+4.  **Access the Web Interface:**
     *   Open your web browser and navigate to the address shown by Uvicorn (e.g., `http://127.0.0.1:8000`).
 
-4.  **Upload and Check Status (New Workflow):**
+5.  **Upload and Check Status (New Workflow):**
     *   Use the form to select a German `.wav` file.
     *   Click "Transcribe".
     *   The server will immediately respond with `202 Accepted` and a JSON message containing a `task_id` (e.g., `{"task_id":"some-uuid-string", "message":"File upload accepted, processing started."}`).
@@ -210,13 +238,16 @@ Modify the `.env` file to control the application's behavior:
         *   Example (using `curl`):
           ```bash
           # Initial check (might show PENDING or PROCESSING)
-          curl http://127.0.0.1:8000/status/some-uuid-string
-          
+          TASK_ID="some-uuid-string" # Replace with your actual task ID
+          curl http://127.0.0.1:8000/status/$TASK_ID
+
           # Keep polling until status is COMPLETED or FAILED
+          # (You can use a loop or browser refresh)
           ```
+        *   You can also access the status endpoint directly in your browser: `http://127.0.0.1:8000/status/some-uuid-string`
     *   **Transcription and diarization still occur in the background and can take significant time.**
 
-5.  **Retrieve Results:**
+6.  **Retrieve Results:**
     *   When polling `/status/{task_id}` shows `"status": "COMPLETED"`, the response will contain the transcription results.
     *   **Successful Response Structure:**
         ```json
@@ -303,22 +334,28 @@ This project includes a `Dockerfile` to build and run the application in a conta
     docker stop german-transcriber
     ```
 
-## Running Tests
+## Development & Contributing
 
-This project includes automated tests using `pytest`.
+### Git Hooks (Pre-commit)
 
-1.  **Ensure the virtual environment is activated and dev dependencies are installed.** (`pip install -r requirements.txt`)
-2.  **Run tests:**
+This repository uses `pre-commit` to enforce certain checks before committing code. Currently, it includes a hook (`check-added-large-files`) to prevent accidentally committing files larger than 100MB (GitHub's limit).
+
+**Setup:**
+
+1.  Activate your virtual environment: `source venv/bin/activate`
+2.  Install pre-commit: `pip install pre-commit`
+3.  Install the hooks: `pre-commit install`
+
+Now, the hooks will run automatically every time you run `git commit`. If a large file is detected in the staged changes, the commit will be aborted.
+
+### Running Tests
+
+1.  Activate your virtual environment: `source venv/bin/activate`
+2.  Run pytest:
     ```bash
-    python -m pytest -v tests/test_main.py
+    pytest
     ```
-    *   The tests cover the `/` (root), `/transcribe/`, and `/status/{task_id}` API endpoints.
-    *   **Mocking:** Tests use `unittest.mock` extensively to:
-        *   Prevent actual model loading.
-        *   Prevent actual file I/O.
-        *   **Simulate the asynchronous workflow:** Mock the background task function (`process_transcription_task`) to control its outcome (success/failure) and use `asyncio.sleep` to test the polling of the `/status/{task_id}` endpoint.
-        *   Test various scenarios like successful transcription, dependency checks (ffmpeg), file saving errors, and task status reporting.
-        *   The `client` fixture manually sets the application state (`app.state`) for endpoint tests.
+    The tests use `httpx` for async calls and extensively mock dependencies like ML models and filesystem operations. See the `tests/` directory and the "Testing" section above for more details.
 
 ## Notes & Potential Improvements
 
